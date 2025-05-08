@@ -11,6 +11,13 @@
       "32": "icon-32.png"
     }
   },
+  "oauth2": {
+    "client_id": "1000000000000-0000000000000000000000000000000.apps.googleusercontent.com", 
+    "scopes": ["https://www.googleapis.com/auth/drive.readonly"]
+  },
+  "background": {
+    "service_worker": "src/pages/background/index.ts"
+  },
   "chrome_url_overrides": {
     "newtab": "src/pages/newtab/index.html"
   },
@@ -18,7 +25,10 @@
     "128": "icon-128.png"
   },
   "permissions": [
-    "activeTab"
+    "activeTab",
+    "downloads", 
+    "storage", 
+    "identity"
   ],
   "content_scripts": [
     {
