@@ -12,14 +12,11 @@
     }
   },
   "oauth2": {
-    "client_id": "1000000000000-0000000000000000000000000000000.apps.googleusercontent.com", 
+    "client_id": "32903464060-7759avs51nf7u60ff2qd0rfq8vm7bian.apps.googleusercontent.com",
     "scopes": ["https://www.googleapis.com/auth/drive.readonly"]
-  },
+  },    
   "background": {
     "service_worker": "src/pages/background/index.ts"
-  },
-  "chrome_url_overrides": {
-    "newtab": "src/pages/newtab/index.html"
   },
   "icons": {
     "128": "icon-128.png"
