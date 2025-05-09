@@ -1,41 +1,21 @@
 import React, { useState, useEffect } from 'react';
 
-declare global {
-  interface Window {
-    google: any;
-    gapi: any;
-  }
+interface DriveFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  iconLink?: string;
 }
 
 export default function Popup() {
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [pickerInitialized, setPickerInitialized] = useState(false);
-
-  useEffect(() => {
-    // Load Google Picker API script
-    const script = document.createElement('script');
-    script.src = 'https://apis.google.com/js/api.js';
-    script.onload = () => {
-      console.log('Google API script loaded');
-      window.gapi.load('picker', () => {
-        console.log('Picker API loaded');
-        setPickerInitialized(true);
-      });
-    };
-    script.onerror = (error) => {
-      console.error('Error loading Google API script:', error);
-      setError('Failed to load Google API');
-    };
-    document.body.appendChild(script);
-
-    return () => {
-      if (document.body.contains(script)) {
-        document.body.removeChild(script);
-      }
-    };
-  }, []);
+  const [files, setFiles] = useState<DriveFile[]>([]);
+  const [currentFolder, setCurrentFolder] = useState<string>('root');
+  const [folderStack, setFolderStack] = useState<string[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [fetching, setFetching] = useState(false);
 
   const handleAuth = () => {
     setLoading(true);
@@ -44,57 +24,62 @@ export default function Popup() {
     chrome.runtime.sendMessage({ action: 'get_oauth_token' }, (response) => {
       setLoading(false);
       if (response?.error) {
-        console.error('Auth error:', response.error);
         setError(response.error);
       } else if (response?.token) {
-        console.log('Token received successfully');
         setToken(response.token);
       }
     });
   };
 
-  const showPicker = () => {
-    console.log('Show picker called');
-    console.log('Token:', token);
-    console.log('Picker initialized:', pickerInitialized);
-    
-    if (!token) {
-      console.error('No token available');
-      setError('Please connect to Google Drive first');
-      return;
-    }
-    
-    if (!pickerInitialized) {
-      console.error('Picker not initialized');
-      setError('Google Picker is not ready yet. Please try again in a moment.');
-      return;
-    }
+  // Fetch files/folders in the current folder
+  useEffect(() => {
+    if (!token) return;
+    setFetching(true);
+    setError(null);
+    fetch(
+      `https://www.googleapis.com/drive/v3/files?q='${currentFolder}'+in+parents+and+trashed=false&fields=files(id%2Cname%2CmimeType%2CiconLink)&pageSize=100`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    )
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch files');
+        return res.json();
+      })
+      .then((data) => {
+        setFiles(data.files || []);
+      })
+      .catch((err) => {
+        setError(err.message);
+      })
+      .finally(() => setFetching(false));
+  }, [token, currentFolder]);
 
-    try {
-      const picker = new window.google.picker.PickerBuilder()
-        .addView(window.google.picker.ViewId.DOCS)
-        .addView(window.google.picker.ViewId.FOLDERS)
-        .setOAuthToken(token)
-        .setDeveloperKey(process.env.GOOGLE_API_KEY)
-        .setCallback((data: any) => {
-          console.log('Picker callback data:', data);
-          if (data.action === window.google.picker.Action.PICKED) {
-            const selectedItems = data.docs;
-            console.log('Selected items:', selectedItems);
-            // Handle selected items here
-            // You can send them to your background script or process them as needed
-          }
-        })
-        .build();
-      picker.setVisible(true);
-    } catch (error) {
-      console.error('Error creating picker:', error);
-      setError('Failed to create file picker. Please try again.');
-    }
+  const handleEnterFolder = (id: string) => {
+    setFolderStack((stack) => [...stack, currentFolder]);
+    setCurrentFolder(id);
+  };
+
+  const handleGoBack = () => {
+    setCurrentFolder((prev) => {
+      const stack = [...folderStack];
+      const prevFolder = stack.pop() || 'root';
+      setFolderStack(stack);
+      return prevFolder;
+    });
+  };
+
+  const handleSelect = (id: string) => {
+    setSelected((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) newSet.delete(id);
+      else newSet.add(id);
+      return newSet;
+    });
   };
 
   return (
-    <div style={{ padding: '20px', width: '300px' }}>
+    <div style={{ padding: '20px', width: '320px', fontSize: 14 }}>
       <h1>ZipSkip</h1>
       {!token ? (
         <button 
@@ -112,38 +97,88 @@ export default function Popup() {
           {loading ? 'Connecting...' : 'Connect to Google Drive'}
         </button>
       ) : (
-        <div>
+        <>
           <p style={{ color: 'green' }}>✓ Successfully connected to Google Drive</p>
-          <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-            <button 
-              onClick={showPicker}
-              disabled={!pickerInitialized}
-              style={{
-                padding: '8px 16px',
-                backgroundColor: '#4285f4',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              Select Files/Folders
-            </button>
-            <button 
-              onClick={() => setToken(null)}
-              style={{
-                padding: '8px 16px',
-                backgroundColor: '#dc3545',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              Disconnect
-            </button>
+          <button 
+            onClick={() => setToken(null)}
+            style={{
+              padding: '8px 16px',
+              backgroundColor: '#dc3545',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              marginBottom: 10
+            }}
+          >
+            Disconnect
+          </button>
+          <div style={{ margin: '10px 0', minHeight: 180, border: '1px solid #eee', borderRadius: 4, background: '#fafbfc', padding: 8 }}>
+            {fetching ? (
+              <div>Loading files...</div>
+            ) : (
+              <>
+                {currentFolder !== 'root' && (
+                  <div style={{ marginBottom: 8 }}>
+                    <button onClick={handleGoBack} style={{ fontSize: 13, color: '#4285f4', background: 'none', border: 'none', cursor: 'pointer' }}>⬅️ Up one level</button>
+                  </div>
+                )}
+                {files.length === 0 ? (
+                  <div>No files or folders found.</div>
+                ) : (
+                  <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                    {files.map((file) => (
+                      <li key={file.id} style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
+                        {file.mimeType === 'application/vnd.google-apps.folder' ? (
+                          <span style={{ cursor: 'pointer', color: '#4285f4', marginRight: 6 }} onClick={() => handleEnterFolder(file.id)}>
+                            📁
+                          </span>
+                        ) : (
+                          <span style={{ marginRight: 6 }}>📄</span>
+                        )}
+                        <span style={{ flex: 1, cursor: file.mimeType === 'application/vnd.google-apps.folder' ? 'pointer' : 'default' }}
+                          onClick={file.mimeType === 'application/vnd.google-apps.folder' ? () => handleEnterFolder(file.id) : undefined}
+                        >
+                          {file.name}
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={selected.has(file.id)}
+                          onChange={() => handleSelect(file.id)}
+                          style={{ marginLeft: 8 }}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
           </div>
-        </div>
+          {selected.size > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <b>Selected IDs:</b>
+              <div style={{ wordBreak: 'break-all', fontSize: 12 }}>{Array.from(selected).join(', ')}</div>
+              <button
+                style={{
+                  marginTop: 8,
+                  padding: '8px 16px',
+                  backgroundColor: '#4285f4',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  width: '100%'
+                }}
+                onClick={() => {
+                  console.log('Download button clicked', Array.from(selected));
+                  alert('Download button clicked! (see console)');
+                }}
+              >
+                Download
+              </button>
+            </div>
+          )}
+        </>
       )}
       {error && (
         <p style={{ color: 'red', marginTop: '10px' }}>
