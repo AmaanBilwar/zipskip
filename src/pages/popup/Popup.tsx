@@ -16,6 +16,8 @@ export default function Popup() {
   const [folderStack, setFolderStack] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [fetching, setFetching] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
 
   const handleAuth = () => {
     setLoading(true);
@@ -76,6 +78,102 @@ export default function Popup() {
       else newSet.add(id);
       return newSet;
     });
+  };
+
+  const downloadFiles = async (fileIds: string[]) => {
+    if (!token) return;
+    
+    setDownloading(true);
+    setError(null);
+    setDownloadProgress({});
+
+    try {
+      // First, get the file metadata for all selected files
+      const filePromises = fileIds.map(async (fileId) => {
+        const response = await fetch(
+          `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        if (!response.ok) throw new Error(`Failed to fetch file metadata for ${fileId}`);
+        return response.json();
+      });
+
+      const fileMetadata = await Promise.all(filePromises);
+
+      // Now download each file
+      const downloadPromises = fileMetadata.map(async (file) => {
+        try {
+          // For Google Docs/Sheets/etc, we need to export them
+          if (file.mimeType.startsWith('application/vnd.google-apps.')) {
+            const exportMimeType = getExportMimeType(file.mimeType);
+            const response = await fetch(
+              `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=${exportMimeType}`,
+              {
+                headers: { Authorization: `Bearer ${token}` },
+              }
+            );
+            if (!response.ok) throw new Error(`Failed to export ${file.name}`);
+            const blob = await response.blob();
+            downloadBlob(blob, `${file.name}.${getFileExtension(exportMimeType)}`);
+          } else {
+            // For regular files, use the download URL
+            const response = await fetch(
+              `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
+              {
+                headers: { Authorization: `Bearer ${token}` },
+              }
+            );
+            if (!response.ok) throw new Error(`Failed to download ${file.name}`);
+            const blob = await response.blob();
+            downloadBlob(blob, file.name);
+          }
+          setDownloadProgress(prev => ({ ...prev, [file.id]: 100 }));
+        } catch (err) {
+          console.error(`Error downloading ${file.name}:`, err);
+          setError(`Failed to download ${file.name}`);
+        }
+      });
+
+      await Promise.all(downloadPromises);
+    } catch (err) {
+      console.error('Download error:', err);
+      setError('Failed to download files');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const getExportMimeType = (mimeType: string): string => {
+    const mimeTypeMap: Record<string, string> = {
+      'application/vnd.google-apps.document': 'application/pdf',
+      'application/vnd.google-apps.spreadsheet': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.google-apps.presentation': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/vnd.google-apps.drawing': 'image/png',
+    };
+    return mimeTypeMap[mimeType] || 'application/pdf';
+  };
+
+  const getFileExtension = (mimeType: string): string => {
+    const extensionMap: Record<string, string> = {
+      'application/pdf': 'pdf',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+      'image/png': 'png',
+    };
+    return extensionMap[mimeType] || 'pdf';
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -166,16 +264,28 @@ export default function Popup() {
                   color: 'white',
                   border: 'none',
                   borderRadius: '4px',
-                  cursor: 'pointer',
-                  width: '100%'
+                  cursor: downloading ? 'not-allowed' : 'pointer',
+                  width: '100%',
+                  opacity: downloading ? 0.7 : 1
                 }}
                 onClick={() => {
-                  console.log('Download button clicked', Array.from(selected));
-                  alert('Download button clicked! (see console)');
+                  if (!downloading) {
+                    downloadFiles(Array.from(selected));
+                  }
                 }}
+                disabled={downloading}
               >
-                Download
+                {downloading ? 'Downloading...' : 'Download'}
               </button>
+              {Object.keys(downloadProgress).length > 0 && (
+                <div style={{ marginTop: 8, fontSize: 12 }}>
+                  {Object.entries(downloadProgress).map(([fileId, progress]) => (
+                    <div key={fileId} style={{ marginBottom: 4 }}>
+                      {files.find(f => f.id === fileId)?.name}: {progress}%
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </>
