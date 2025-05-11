@@ -16,16 +16,23 @@
     "scopes": ["https://www.googleapis.com/auth/drive.readonly"]
   },    
   "background": {
-    "service_worker": "src/pages/background/index.ts"
+    "service_worker": "src/pages/background/index.ts",
+    "type": "module"
   },
   "icons": {
     "128": "icon-128.png"
   },
   "permissions": [
     "activeTab",
-    "downloads", 
-    "storage", 
-    "identity"
+    "downloads",
+    "downloads.shelf",
+    "storage",
+    "identity",
+    "downloads.open"
+  ],
+  "host_permissions": [
+    "https://www.googleapis.com/*",
+    "https://www.googleapis.com/*"
   ],
   "content_scripts": [
     {

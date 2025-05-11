@@ -13,6 +13,7 @@ import {
   Paper
 } from '@mui/material';
 import { FolderOpen, FileDownload, ArrowBack, CheckBox, CheckBoxOutlineBlank, Download } from '@mui/icons-material';
+import { initiateGoogleAuth } from '../../services/googleAuth';
 
 interface DriveFile {
   id: string;
@@ -41,20 +42,26 @@ export default function Popup() {
   const [isSelectingLocation, setIsSelectingLocation] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [currentFolderName, setCurrentFolderName] = useState<string>('My Drive');
+  const [currentDownloadingFile, setCurrentDownloadingFile] = useState<string | null>(null);
+  const [downloadComplete, setDownloadComplete] = useState(false);
 
   const handleAuth = () => {
     setLoading(true);
     setError(null);
-    
-    chrome.runtime.sendMessage({ action: 'get_oauth_token' }, (response) => {
-      setLoading(false);
-      if (response?.error) {
-        setError(response.error);
-      } else if (response?.token) {
-        setToken(response.token);
-      }
-    });
+    initiateGoogleAuth();
   };
+
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'google-auth-token') {
+        setToken(e.data.token);
+        setLoading(false);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   // Fetch files/folders in the current folder
   useEffect(() => {
@@ -141,6 +148,7 @@ export default function Popup() {
     setDownloadProgress({});
     setScanningFolders(true);
     setFolderScanProgress(null);
+    setDownloadComplete(false);
 
     try {
       // First, get all files including those in folders
@@ -153,6 +161,7 @@ export default function Popup() {
       // Now download each file
       const downloadPromises = allFiles.map(async (file) => {
         try {
+          setCurrentDownloadingFile(file.name);
           let filename = file.name;
           if (folderName) {
             filename = `${folderName}/${filename}`;
@@ -188,6 +197,7 @@ export default function Popup() {
         }
       });
       await Promise.all(downloadPromises);
+      setDownloadComplete(true);
     } catch (err) {
       console.error('Download error:', err);
       setError('Failed to download files');
@@ -195,6 +205,7 @@ export default function Popup() {
       setDownloading(false);
       setScanningFolders(false);
       setFolderScanProgress(null);
+      setCurrentDownloadingFile(null);
     }
   };
 
@@ -308,66 +319,18 @@ export default function Popup() {
     return extensionMap[mimeType] || 'pdf';
   };
 
-  const handleDownloadLocationSelection = async () => {
-    setIsSelectingLocation(true);
-    try {
-      // Create a temporary file to trigger the save dialog
-      const tempBlob = new Blob([''], { type: 'text/plain' });
-      const tempUrl = URL.createObjectURL(tempBlob);
-      
-      // Use chrome.downloads.download with saveAs: true to prompt for location
-      await new Promise((resolve, reject) => {
-        chrome.downloads.download({
-          url: tempUrl,
-          filename: 'temp.txt',
-          saveAs: true,
-          conflictAction: 'uniquify'
-        }, (downloadId) => {
-          if (chrome.runtime.lastError) {
-            reject(chrome.runtime.lastError);
-          } else {
-            // Get the download item to confirm it was saved
-            chrome.downloads.search({ id: downloadId }, (results) => {
-              if (results && results[0]) {
-                setSelectedLocation(results[0].filename);
-                // Cancel the temporary download
-                chrome.downloads.cancel(downloadId);
-                resolve(downloadId);
-              } else {
-                reject(new Error('Failed to get download location'));
-              }
-            });
-          }
-        });
-      });
-
-      // Only proceed with downloads if we have a confirmed location
-      if (selectedLocation) {
-        setShowFolderDialog(false);
-        downloadFiles(selectedFilesForDownload);
-      }
-    } catch (error) {
-      console.error('Error selecting download location:', error);
-      setError('Failed to select download location');
-    } finally {
-      setIsSelectingLocation(false);
-    }
-  };
-
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
-    // Use Chrome's downloads API to download the file
     chrome.downloads.download({
       url: url,
       filename: filename,
-      saveAs: false, // Don't prompt for each file
-      conflictAction: 'uniquify' // Handle filename conflicts
+      saveAs: false,
+      conflictAction: 'uniquify'
     }, (downloadId) => {
       if (chrome.runtime.lastError) {
         console.error('Download failed:', chrome.runtime.lastError);
         setError(`Failed to download ${filename}`);
       }
-      // Clean up the blob URL
       URL.revokeObjectURL(url);
     });
   };
@@ -531,14 +494,7 @@ export default function Popup() {
                 startIcon={<FileDownload />}
                 onClick={() => {
                   const selectedArray = Array.from(selected);
-                  const hasFolders = files.some(f => selected.has(f.id) && f.mimeType === 'application/vnd.google-apps.folder');
-                  
-                  if (hasFolders) {
-                    setSelectedFilesForDownload(selectedArray);
-                    setShowFolderDialog(true);
-                  } else {
-                    downloadFiles(selectedArray);
-                  }
+                  downloadFiles(selectedArray);
                 }}
                 disabled={downloading || scanningFolders}
               >
@@ -561,10 +517,15 @@ export default function Popup() {
               {Object.keys(downloadProgress).length > 0 && (
                 <Box sx={{ mt: 1 }}>
                   {Object.entries(downloadProgress).map(([fileId, progress]) => (
-                    <Box key={fileId} sx={{ mb: 0.5 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        {files.find(f => f.id === fileId)?.name}
-                      </Typography>
+                    <Box key={fileId} sx={{ mb: 1 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Typography variant="caption" color="text.secondary">
+                          {files.find(f => f.id === fileId)?.name}
+                        </Typography>
+                        <Typography variant="caption" color={progress === 100 ? "success.main" : "text.secondary"}>
+                          {progress === 100 ? "✓ Complete" : "Downloading..."}
+                        </Typography>
+                      </Box>
                       <LinearProgress 
                         variant="determinate" 
                         value={progress}
@@ -572,6 +533,11 @@ export default function Popup() {
                       />
                     </Box>
                   ))}
+                  {downloadComplete && (
+                    <Typography variant="body2" color="success.main" sx={{ mt: 1, textAlign: 'center' }}>
+                      ✓ All downloads completed successfully
+                    </Typography>
+                  )}
                 </Box>
               )}
             </Paper>
